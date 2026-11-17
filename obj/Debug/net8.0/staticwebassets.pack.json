@@ -1,0 +1,33 @@
+{
+  "Files": [
+    {
+      "Id": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\app.js",
+      "PackagePath": "staticwebassets\\app.js"
+    },
+    {
+      "Id": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\index.html",
+      "PackagePath": "staticwebassets\\index.html"
+    },
+    {
+      "Id": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\styles.css",
+      "PackagePath": "staticwebassets\\styles.css"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.Kartoteka.Server.Microsoft.AspNetCore.StaticWebAssets.props",
+      "PackagePath": "build\\Microsoft.AspNetCore.StaticWebAssets.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.build.Kartoteka.Server.props",
+      "PackagePath": "build\\Kartoteka.Server.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.buildMultiTargeting.Kartoteka.Server.props",
+      "PackagePath": "buildMultiTargeting\\Kartoteka.Server.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.buildTransitive.Kartoteka.Server.props",
+      "PackagePath": "buildTransitive\\Kartoteka.Server.props"
+    }
+  ],
+  "ElementsToRemove": []
+}

@@ -1,0 +1,77 @@
+{
+  "Version": 1,
+  "Hash": "RQHLL1m6d4ySfezYdSxWvZGC+7tuq5JoO8IMdSrpnWk=",
+  "Source": "Kartoteka.Server",
+  "BasePath": "_content/Kartoteka.Server",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [
+    {
+      "Name": "Kartoteka.Server\\wwwroot",
+      "Source": "Kartoteka.Server",
+      "ContentRoot": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\",
+      "BasePath": "_content/Kartoteka.Server",
+      "Pattern": "**"
+    }
+  ],
+  "Assets": [
+    {
+      "Identity": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\app.js",
+      "SourceId": "Kartoteka.Server",
+      "SourceType": "Discovered",
+      "ContentRoot": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\",
+      "BasePath": "_content/Kartoteka.Server",
+      "RelativePath": "app.js",
+      "AssetKind": "All",
+      "AssetMode": "All",
+      "AssetRole": "Primary",
+      "AssetMergeBehavior": "PreferTarget",
+      "AssetMergeSource": "",
+      "RelatedAsset": "",
+      "AssetTraitName": "",
+      "AssetTraitValue": "",
+      "CopyToOutputDirectory": "Never",
+      "CopyToPublishDirectory": "PreserveNewest",
+      "OriginalItemSpec": "wwwroot\\app.js"
+    },
+    {
+      "Identity": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\index.html",
+      "SourceId": "Kartoteka.Server",
+      "SourceType": "Discovered",
+      "ContentRoot": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\",
+      "BasePath": "_content/Kartoteka.Server",
+      "RelativePath": "index.html",
+      "AssetKind": "All",
+      "AssetMode": "All",
+      "AssetRole": "Primary",
+      "AssetMergeBehavior": "PreferTarget",
+      "AssetMergeSource": "",
+      "RelatedAsset": "",
+      "AssetTraitName": "",
+      "AssetTraitValue": "",
+      "CopyToOutputDirectory": "Never",
+      "CopyToPublishDirectory": "PreserveNewest",
+      "OriginalItemSpec": "wwwroot\\index.html"
+    },
+    {
+      "Identity": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\styles.css",
+      "SourceId": "Kartoteka.Server",
+      "SourceType": "Discovered",
+      "ContentRoot": "C:\\Потёмкин\\Программа\\kartoteka_server_stage25\\wwwroot\\",
+      "BasePath": "_content/Kartoteka.Server",
+      "RelativePath": "styles.css",
+      "AssetKind": "All",
+      "AssetMode": "All",
+      "AssetRole": "Primary",
+      "AssetMergeBehavior": "PreferTarget",
+      "AssetMergeSource": "",
+      "RelatedAsset": "",
+      "AssetTraitName": "",
+      "AssetTraitValue": "",
+      "CopyToOutputDirectory": "Never",
+      "CopyToPublishDirectory": "PreserveNewest",
+      "OriginalItemSpec": "wwwroot\\styles.css"
+    }
+  ]
+}
