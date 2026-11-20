@@ -1,0 +1,109 @@
+﻿[CmdletBinding()]
+param(
+ [Parameter(Mandatory=$true)][string]$InstallDirectory,
+ [Parameter(Mandatory=$true)][string]$PayloadDirectory,
+ [Parameter(Mandatory=$true)][string]$ServerDnsName,
+ [int]$Port=8443
+)
+$ErrorActionPreference='Stop'
+ffunction New-RandomSecret([int]$Bytes=32) {
+    $b = New-Object byte[] $Bytes
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($b)
+    return [Convert]::ToBase64String($b).TrimEnd('=').Replace('+','-').Replace('/','_')
+}
+function Quote-PgLiteral([string]$Value) { return "'" + $Value.Replace("'", "''") + "'" }
+if ($ServerDnsName -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}[A-Za-z0-9]$' -and $ServerDnsName -notmatch '^[A-Za-z0-9]$') { throw 'Недопустимое DNS-имя сервера.' }
+if ($Port -lt 1024 -or $Port -gt 65535) { throw 'Порт должен быть 1024–65535.' }
+# Do not install over an existing PostgreSQL service or occupied database port.
+$existingPgServices = @(Get-Service -Name 'postgresql*' -ErrorAction SilentlyContinue)
+if ($existingPgServices.Count -gt 0) {
+    throw 'Обнаружена существующая служба PostgreSQL. Установка остановлена, чтобы не затронуть существующие данные.'
+}
+
+$portListener = Get-NetTCPConnection -LocalPort 5432 -State Listen -ErrorAction SilentlyContinue
+if ($portListener) {
+    throw 'Порт 5432 уже занят. Установка остановлена, чтобы не затронуть существующую службу базы данных.'
+}
+$pgInstaller=Get-ChildItem -LiteralPath $PayloadDirectory -Filter 'postgresql-*-windows-x64.exe' -File | Select-Object -First 1
+if (-not $pgInstaller) { throw 'В установочном пакете нет PostgreSQL. Установка остановлена.' }
+if (-not (Test-Path (Join-Path $InstallDirectory 'Kartoteka.Server.exe'))) { throw 'Не найдена опубликованная сборка Kartoteka.Server.exe.' }
+
+Write-Host 'Создаётся отдельный пароль PostgreSQL. Сохраните его в менеджере паролей администратора.' -ForegroundColor Cyan
+$pgPasswordSecure=Read-Host 'Придумайте пароль суперпользователя PostgreSQL (не менее 16 символов)' -AsSecureString
+$ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($pgPasswordSecure)
+try { $pgPassword=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+if ($pgPassword.Length -lt 16) { throw 'Пароль PostgreSQL должен содержать не менее 16 символов.' }
+
+# The PostgreSQL EDB installer has unattended switches. The exact package version is pinned by the payload filename and must be tested before release.
+$pgRoot=Join-Path $env:ProgramFiles 'PostgreSQL'
+$pgVersion=if ($pgInstaller.BaseName -match 'postgresql-(\d+)') { $Matches[1] } else { throw 'Имя установщика должно включать версию, например postgresql-17-...-windows-x64.exe.' }
+$pgInstall=Join-Path $pgRoot $pgVersion
+$pgArgs=@('--mode','unattended','--unattendedmodeui','none','--prefix',$pgInstall,'--datadir',(Join-Path $env:ProgramData "Kartoteka\PostgreSQL\data"),'--serverport','5432','--servicename',"postgresql-x64-$pgVersion",'--superaccount','postgres','--superpassword',$pgPassword)
+$proc=Start-Process -FilePath $pgInstaller.FullName -ArgumentList $pgArgs -Wait -PassThru
+if ($proc.ExitCode -ne 0) { throw "Установщик PostgreSQL завершился с кодом $($proc.ExitCode)." }
+$psql=Join-Path $pgInstall 'bin\psql.exe'
+if (-not (Test-Path $psql)) { throw "После установки не найден psql.exe: $psql" }
+$env:PGPASSWORD=$pgPassword
+try {
+ $dbPassword=New-RandomSecret 36
+   $roleExists = & $psql -h 127.0.0.1 -U postgres -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='kartoteka_app'"
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Не удалось проверить наличие роли приложения PostgreSQL.'
+  }
+
+  if ($roleExists.Trim() -eq '1') {
+    $roleSql = "ALTER ROLE kartoteka_app WITH LOGIN PASSWORD " + (Quote-PgLiteral $dbPassword)
+  } else {
+    $roleSql = "CREATE ROLE kartoteka_app LOGIN PASSWORD " + (Quote-PgLiteral $dbPassword)
+  }
+
+  & $psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c $roleSql
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Не удалось создать или настроить роль приложения PostgreSQL.'
+  }
+ $exists=& $psql -h 127.0.0.1 -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='kartoteka'"
+ if ($LASTEXITCODE -ne 0) { throw 'Не удалось проверить наличие базы kartoteka.' }
+ if ($exists.Trim() -eq '1') {
+   throw 'База kartoteka уже существует. Установка остановлена, чтобы не изменять существующие данные. Используйте отдельную процедуру обновления/восстановления.'
+ }
+ & $psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE kartoteka OWNER kartoteka_app ENCODING ''UTF8'''
+ if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать базу kartoteka.' }
+} finally { Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue }
+
+$adminEmail=Read-Host 'Введите email первого администратора'
+$adminSecure=Read-Host 'Придумайте пароль первого администратора (12+ символов, верхний/нижний регистр, цифра, спецсимвол)' -AsSecureString
+$ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($adminSecure)
+try { $adminPassword=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+if ($adminEmail -notmatch '^[^\s@]+@[^\s@]+\.[^\s@]+$') { throw 'Email администратора указан неверно.' }
+if ($adminPassword.Length -lt 12 -or $adminPassword -notmatch '[A-ZА-Я]' -or $adminPassword -notmatch '[a-zа-я]' -or $adminPassword -notmatch '\d' -or $adminPassword -notmatch '[^A-Za-zА-Яа-я0-9]') { throw 'Пароль администратора не соответствует требованиям.' }
+
+$dataRoot=Join-Path $env:ProgramData 'Kartoteka'
+New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
+$cert=New-SelfSignedCertificate -DnsName $ServerDnsName -CertStoreLocation 'Cert:\LocalMachine\My' -FriendlyName 'Картотека — локальный сервер' -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(3) -KeyExportPolicy Exportable
+$pfxPath=Join-Path $dataRoot 'kartoteka-server.pfx'
+$cerPath=Join-Path $dataRoot 'kartoteka-server.cer'
+$pfxPassword=New-RandomSecret 36
+$securePfx=ConvertTo-SecureString $pfxPassword -AsPlainText -Force
+Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $securePfx | Out-Null
+Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
+
+# Build a correctly escaped Npgsql connection string; do not print secrets to the console.
+$dbConnection="Host=127.0.0.1;Port=5432;Database=kartoteka;Username=kartoteka_app;Password=$dbPassword;Pooling=true;Timeout=15;Command Timeout=30;SSL Mode=Prefer"
+$serviceScript=Join-Path $PSScriptRoot 'Install-KartotekaServerService.ps1'
+$adminSecure2=ConvertTo-SecureString $adminPassword -AsPlainText -Force
+try {
+  & $serviceScript -InstallDirectory $InstallDirectory -DatabaseConnection $dbConnection -CertificatePath $pfxPath -CertificatePassword $pfxPassword -ServerDnsName $ServerDnsName -AdminEmail $adminEmail -AdminPassword $adminSecure2 -Port $Port -InitializeEmptyDatabase -ErrorAction Stop
+  if (-not $?) {
+    throw 'Сценарий установки службы завершился с ошибкой.'
+  }
+} catch {
+  throw "Не удалось установить службу Картотеки: $($_.Exception.Message)"
+}
+
+# Keep public trust certificate and a short handoff note in a separate, administrator-only data folder.
+$note=Join-Path $dataRoot 'ПОДКЛЮЧЕНИЕ.txt'
+@("Адрес картотеки: https://$ServerDnsName`:$Port/", "Публичный сертификат для доверенной установки на рабочих компьютерах: $cerPath", 'Передайте файл .cer на рабочие компьютеры защищённым способом. Не передавайте .pfx и пароли.') | Set-Content -LiteralPath $note -Encoding UTF8
+Write-Host "Сервер установлен. Адрес: https://$ServerDnsName`:$Port/" -ForegroundColor Green
+Write-Host "Публичный сертификат: $cerPath" -ForegroundColor Yellow
+Write-Host 'Сохраните пароли администратора и PostgreSQL в менеджере паролей.' -ForegroundColor Yellow
+$pgPassword=$null; $dbPassword=$null; $adminPassword=$null; $pfxPassword=$null; $dbConnection=$null; $pgArgs=$null

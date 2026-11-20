@@ -1,0 +1,89 @@
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory=$true)][string]$ServerUrl,
+    [Parameter(Mandatory=$true)][string]$ServerDnsName,
+    [string]$CertificateFile,
+    [switch]$TrustCertificate
+)
+
+$ErrorActionPreference = 'Stop'
+
+$uri = $null
+if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$uri) -or
+    $uri.Scheme -ne 'https' -or
+    $uri.UserInfo -ne '' -or
+    $uri.AbsolutePath -ne '/' -or
+    $uri.Query -ne '' -or
+    $uri.Fragment -ne '') {
+    throw 'Укажите HTTPS-адрес сервера без пути и дополнительных параметров.'
+}
+
+if ($uri.Host -ine $ServerDnsName) {
+    throw 'Имя сервера в URL должно совпадать с DNS-именем сертификата.'
+}
+
+if (-not $CertificateFile) {
+    $CertificateFile = Read-Host 'Введите полный путь к публичному файлу сертификата сервера (.cer)'
+}
+
+if (-not (Test-Path -LiteralPath $CertificateFile -PathType Leaf)) {
+    throw "Файл сертификата не найден: $CertificateFile"
+}
+
+$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
+    (Resolve-Path -LiteralPath $CertificateFile).Path
+)
+
+if ($cert.HasPrivateKey) {
+    throw 'Выбран сертификат с закрытым ключом. Передавайте только публичный файл .cer.'
+}
+
+if ($cert.NotAfter -le (Get-Date) -or $cert.NotBefore -gt (Get-Date)) {
+    throw 'Сертификат ещё не действует или срок его действия истёк.'
+}
+
+$certDnsName = $cert.GetNameInfo(
+    [System.Security.Cryptography.X509Certificates.X509NameType]::DnsName,
+    $false
+)
+
+if ($certDnsName -ine $ServerDnsName) {
+    throw "Имя сертификата '$certDnsName' не совпадает с именем сервера '$ServerDnsName'."
+}
+
+Write-Host ''
+Write-Host 'Проверьте, что сертификат получен с доверенного серверного компьютера.' -ForegroundColor Yellow
+Write-Host "Сервер: $ServerDnsName"
+Write-Host "Отпечаток SHA-1 сертификата: $($cert.Thumbprint)"
+Write-Host 'Сверьте отпечаток с сертификатом на сервере по независимому каналу связи.'
+
+if ($TrustCertificate) {
+    $confirmation = Read-Host 'После сверки отпечатка введите TRUST для добавления сертификата в доверенные'
+    if ($confirmation -cne 'TRUST') {
+        throw 'Добавление сертификата отменено.'
+    }
+
+    Import-Certificate -FilePath (Resolve-Path -LiteralPath $CertificateFile).Path `
+        -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
+}
+
+$health = [Uri]::new($uri, '/health')
+$response = Invoke-WebRequest -Uri $health.AbsoluteUri -TimeoutSec 8
+
+if ($response.StatusCode -ne 200) {
+    throw "Сервер ответил кодом $($response.StatusCode), ожидался 200."
+}
+
+$shortcutRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Картотека'
+New-Item -ItemType Directory -Path $shortcutRoot -Force | Out-Null
+
+$shortcutPath = Join-Path $shortcutRoot 'Картотека.url'
+@('[InternetShortcut]', "URL=$($uri.AbsoluteUri)", 'IconIndex=0') |
+    Set-Content -LiteralPath $shortcutPath -Encoding ASCII
+
+$desktopPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Картотека.url'
+@('[InternetShortcut]', "URL=$($uri.AbsoluteUri)", 'IconIndex=0') |
+    Set-Content -LiteralPath $desktopPath -Encoding ASCII
+
+Write-Host "Рабочее место настроено: $($uri.AbsoluteUri)" -ForegroundColor Green

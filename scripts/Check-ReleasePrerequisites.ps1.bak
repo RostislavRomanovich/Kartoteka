@@ -1,0 +1,46 @@
+[CmdletBinding()]
+param(
+    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+    [switch]$RequirePostgresPayload
+)
+$ErrorActionPreference = 'Stop'
+$failures = [System.Collections.Generic.List[string]]::new()
+$warnings = [System.Collections.Generic.List[string]]::new()
+
+$project = Join-Path $ProjectRoot 'Kartoteka.Server.csproj'
+if (-not (Test-Path $project)) { $failures.Add("Не найден проект: $project") }
+
+$publish = Join-Path $ProjectRoot 'artifacts\publish'
+if (-not (Test-Path $publish) -or -not (Test-Path (Join-Path $publish 'Kartoteka.Server.exe'))) {
+    $failures.Add('Нет опубликованного Windows x64 приложения в artifacts\publish. Сначала выполните dotnet publish.')
+}
+
+$pg = Get-ChildItem (Join-Path $ProjectRoot 'installer\payload') -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^postgresql.*\.exe$' } | Select-Object -First 1
+if ($RequirePostgresPayload -and -not $pg) {
+    $failures.Add('В installer\payload отсутствует закреплённый официальный установщик PostgreSQL x64.')
+} elseif (-not $pg) {
+    $warnings.Add('Установщик PostgreSQL не найден: серверный режим пока нельзя упаковать автономно.')
+}
+
+$migrations = Join-Path $ProjectRoot 'Migrations'
+if (-not (Test-Path $migrations)) {
+    $failures.Add('Не найдена папка Migrations. На чистой базе схема не будет создана автоматически.')
+}
+
+$csprojText = if (Test-Path $project) { Get-Content $project -Raw } else { '' }
+$programText = if (Test-Path (Join-Path $ProjectRoot 'Program.cs')) { Get-Content (Join-Path $ProjectRoot 'Program.cs') -Raw } else { '' }
+if ($csprojText -notmatch 'Microsoft\.Extensions\.Hosting\.WindowsServices') {
+    $failures.Add('Не подключён пакет Microsoft.Extensions.Hosting.WindowsServices для службы Windows.')
+}
+if ($programText -notmatch 'UseWindowsService\(') {
+    $failures.Add('В Program.cs не найден UseWindowsService(); службу нельзя считать реализованной.')
+}
+
+foreach ($warning in $warnings) { Write-Warning $warning }
+if ($failures.Count -gt 0) {
+    Write-Host "Проверка выпуска НЕ ПРОЙДЕНА ($($failures.Count) блокирующих пунктов):" -ForegroundColor Red
+    $failures | ForEach-Object { Write-Host " - $_" -ForegroundColor Red }
+    exit 1
+}
+Write-Host 'Базовые проверки пройдены. Это не заменяет тестирование на чистой Windows-машине.' -ForegroundColor Green

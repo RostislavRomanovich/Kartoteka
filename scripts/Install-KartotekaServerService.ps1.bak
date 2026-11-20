@@ -1,0 +1,126 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory=$true)][string]$InstallDirectory,
+    [Parameter(Mandatory=$true)][string]$DatabaseConnection,
+    [Parameter(Mandatory=$true)][string]$CertificatePath,
+    [Parameter(Mandatory=$true)][string]$CertificatePassword,
+    [Parameter(Mandatory=$true)][string]$ServerDnsName,
+    [Parameter(Mandatory=$true)][string]$AdminEmail,
+    [Parameter(Mandatory=$true)][securestring]$AdminPassword,
+    [int]$Port = 8443,
+    [switch]$InitializeEmptyDatabase
+)
+
+$ErrorActionPreference = 'Stop'
+$serviceName = 'KartotekaServer'
+$serviceDisplayName = 'Картотека — сервер'
+$exe = Join-Path $InstallDirectory 'Kartoteka.Server.exe'
+if (-not (Test-Path $exe)) { throw "Не найден опубликованный сервер: $exe" }
+if (-not (Test-Path $CertificatePath)) { throw "Не найден сертификат TLS: $CertificatePath" }
+if ($Port -lt 1024 -or $Port -gt 65535) { throw 'Порт должен быть в диапазоне 1024–65535.' }
+if ($ServerDnsName -notmatch '^[A-Za-z0-9.-]+$') { throw 'Имя сервера должно быть DNS-именем без протокола и порта.' }
+if ([string]::IsNullOrWhiteSpace($DatabaseConnection)) { throw 'Строка подключения PostgreSQL не задана.' }
+if ([string]::IsNullOrWhiteSpace($AdminEmail) -or $AdminEmail -notmatch '^[^\s@]+@[^\s@]+\.[^\s@]+$') { throw 'Укажите корректный email первого администратора.' }
+
+$ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($AdminPassword)
+try { $adminPasswordPlain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+if ($adminPasswordPlain.Length -lt 12 -or $adminPasswordPlain -notmatch '[A-ZА-Я]' -or $adminPasswordPlain -notmatch '[a-zа-я]' -or $adminPasswordPlain -notmatch '\d' -or $adminPasswordPlain -notmatch '[^A-Za-zА-Яа-я0-9]') {
+    throw 'Пароль администратора должен быть не короче 12 символов и содержать верхний/нижний регистр, цифру и спецсимвол.'
+}
+
+# Keep mutable data outside Program Files. The installer never deletes this directory.
+$dataRoot = Join-Path $env:ProgramData 'Kartoteka'
+New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
+$acl = Get-Acl $dataRoot
+$acl.SetAccessRuleProtection($true, $false)
+$systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule('SYSTEM','FullControl','ContainerInherit,ObjectInherit','None','Allow')
+$adminsRule = New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Administrators','FullControl','ContainerInherit,ObjectInherit','None','Allow')
+$acl.SetAccessRule($systemRule); $acl.SetAccessRule($adminsRule); Set-Acl -Path $dataRoot -AclObject $acl
+
+# Validate the PFX password before registering the service.
+$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
+$cert.Import($CertificatePath, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::MachineKeySet)
+if (-not $cert.HasPrivateKey) { throw 'TLS-сертификат не содержит закрытого ключа.' }
+if ($cert.NotAfter -le (Get-Date)) { throw 'Срок действия TLS-сертификата истёк.' }
+if ($cert.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::DnsName, $false) -ne $ServerDnsName) {
+    throw "Имя сертификата не совпадает с именем сервера $ServerDnsName. Подготовьте сертификат с соответствующим SAN/CN."
+}
+
+$jwtBytes = New-Object byte[] 48
+[System.Security.Cryptography.RandomNumberGenerator]::Fill($jwtBytes)
+$jwtKey = [Convert]::ToBase64String($jwtBytes)
+$envLines = @(
+    "KARTOTEKA_DB_CONNECTION=$DatabaseConnection",
+    "KARTOTEKA_JWT_SIGNING_KEY=$jwtKey",
+    "KARTOTEKA_BOOTSTRAP_ADMIN_EMAIL=$AdminEmail",
+    "KARTOTEKA_BOOTSTRAP_ADMIN_PASSWORD=$adminPasswordPlain",
+    "ASPNETCORE_ENVIRONMENT=Production",
+    "ASPNETCORE_Kestrel__Endpoints__Https__Url=https://0.0.0.0:$Port",
+    "ASPNETCORE_Kestrel__Endpoints__Https__Certificate__Path=$CertificatePath",
+    "ASPNETCORE_Kestrel__Endpoints__Https__Certificate__Password=$CertificatePassword"
+)
+if ($InitializeEmptyDatabase) { $envLines += 'KARTOTEKA_INITIALIZE_DATABASE=true' }
+
+try {
+        $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+
+    if ($existing) {
+        throw 'Служба KartotekaServer уже существует. Повторная установка остановлена, чтобы не нарушить работу действующего сервера. Для обновления потребуется отдельная процедура.'
+    }
+    New-Service -Name $serviceName -DisplayName $serviceDisplayName -BinaryPathName ('"' + $exe + '"') -StartupType Automatic -Description 'Сервер локальной сетевой картотеки сотрудников.' | Out-Null
+    $serviceReg = "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName"
+    New-ItemProperty -Path $serviceReg -Name Environment -PropertyType MultiString -Value $envLines -Force | Out-Null
+    # Restrict the service registry key to SYSTEM and local administrators.
+    $key = Get-Acl $serviceReg
+    $key.SetAccessRuleProtection($true, $false)
+    $key.SetOwner([System.Security.Principal.NTAccount]'BUILTIN\Administrators')
+    $key.SetAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule('SYSTEM','FullControl','ContainerInherit','None','Allow')))
+    $key.SetAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule('BUILTIN\Administrators','FullControl','ContainerInherit','None','Allow')))
+    Set-Acl -Path $serviceReg -AclObject $key
+    Start-Service -Name $serviceName
+
+    $healthUrl = "https://127.0.0.1:$Port/health"
+    $deadline = (Get-Date).AddSeconds(90)
+    $healthy = $false
+    while ((Get-Date) -lt $deadline) {
+        try {
+            # The cert is validated by DNS name in normal clients. This local bootstrap probe only checks liveness.
+            $oldCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+            try {
+                # Temporary bypass is limited to this bootstrap liveness probe only;
+                # normal workstation connections must validate the trusted certificate.
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+                $healthUrl = "https://$ServerDnsName`:$Port/health"
+                $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 3
+                if ($response.StatusCode -eq 200) { $healthy = $true; break }
+            } finally {
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $oldCallback
+            }
+        } catch { Start-Sleep -Seconds 2 }
+        $svc = Get-Service -Name $serviceName
+        if ($svc.Status -ne 'Running') { break }
+    }
+    if (-not $healthy) {
+        $svc = Get-Service -Name $serviceName
+        throw "Служба не прошла проверку /health. Текущий статус: $($svc.Status). Проверьте журналы приложения и подключение к БД."
+    }
+
+    # Bootstrap credentials and one-time schema initialization are removed after first successful startup.
+    $safeEnv = @($envLines | Where-Object { $_ -notmatch '^KARTOTEKA_BOOTSTRAP_ADMIN_(EMAIL|PASSWORD)=' -and $_ -ne 'KARTOTEKA_INITIALIZE_DATABASE=true' })
+    Set-ItemProperty -Path $serviceReg -Name Environment -Value $safeEnv
+    Restart-Service -Name $serviceName -Force
+    Write-Host "Служба установлена. Проверка готовности: $healthUrl" -ForegroundColor Green
+    Write-Host "Откройте с доверенным сертификатом: https://$ServerDnsName`:$Port/" -ForegroundColor Green
+    Write-Host "Данные и будущие резервные копии храните вне каталога приложения: $dataRoot" -ForegroundColor Yellow
+}
+catch {
+    Write-Error $_
+    throw
+}
+finally {
+    $adminPasswordPlain = $null
+    $jwtKey = $null
+    $envLines = $null
+    [GC]::Collect()
+}
