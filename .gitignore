@@ -1,0 +1,57 @@
+# Сборка .NET
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+artifacts/
+TestResults/
+
+# Публикация в корне
+/*.dll
+/*.exe
+/*.pdb
+/*.deps.json
+/*.runtimeconfig.json
+/*.staticwebassets.runtime.json
+/*.staticwebassets.endpoints.json
+/cs/
+/de/
+/es/
+/fr/
+/it/
+/ja/
+/ko/
+/pl/
+/pt-BR/
+/ru/
+/tr/
+/zh-Hans/
+/zh-Hant/
+/runtimes/
+
+# Секреты
+/appsettings.json
+/appsettings.Production.json
+*.secrets.json
+.env
+
+# IDE и ОС
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.bak
+Thumbs.db
+Desktop.ini
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Установщик
+installer/payload/
+*.log
